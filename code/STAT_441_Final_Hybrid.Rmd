@@ -1,0 +1,865 @@
+---
+jupyter:
+  jupytext:
+    formats: ipynb,Rmd
+    text_representation:
+      extension: .Rmd
+      format_name: rmarkdown
+      format_version: '1.2'
+      jupytext_version: 1.14.5
+  kernelspec:
+    display_name: Python 3 (ipykernel)
+    language: python
+    name: python3
+---
+
+<!-- #region id="OqkjKRbte48K" -->
+**Pre-Processing**
+
+The Data was taken from the ESPN NBA Player Stats website found here: https://www.espn.com/nba/stats/player/_/season/2022/seasontype/2. Each player that was recorded in their dataset played 70% of his team's games each season. This means that we are only using meaningful data.
+
+A package to scrape the data, create graphs and other statistical measures exists here: https://github.com/UBC-MDS/rsketball. Unfortunately, the package seems to be outdated or not fully developed as we were unable to install and use the package in our versions of R.
+
+Instead, we resorted to processing the. data manually. From the website, we were able to pull 9593 rows of data with 22 features of interest. Various checks were used in Excel to ensure no data was lost during the processing stage. The features in the data are as follows:
+
+  - SEASON: The season
+  - POS: Position
+  - GP: Games Played
+  - MIN: Minutes Per Game
+  - PTS: Points Per Game
+  - FGM: Average Field Goals Made
+  - FGA: Average Field Goals Attempted
+  - FG%: Field Goal Percentage
+  - 3PM: Average 3-Point Field Goals Made
+  - 3PA: Average 3-Point Field Goals Attempted
+  - 3P%: 3-Point Field Goal Percentage
+  - FTM: Average Free Throws Made
+  - FTA: Average Free Throws Attempted
+  - FT%: Free Throw Percentage
+  - REB: Rebounds Per Game
+  - AST: Assists Per Game
+  - STL: Steals Per Game
+  - BLK: Blocks Per Game
+  - TO: Turnovers Per Game
+  - DD2: Double Double
+  - TD3: Triple Double
+<!-- #endregion -->
+
+```{python id="b944e6cf"}
+import pandas as pd
+import numpy as np
+# Plotting
+import matplotlib.pyplot as plt
+import seaborn as sns
+# SVM
+from sklearn import svm
+from sklearn.svm import LinearSVC
+# Tree
+from sklearn import tree
+# Logistic Regression
+from sklearn.linear_model import LogisticRegression
+# Bagging
+from sklearn.ensemble import BaggingClassifier
+# Splitting, cross validation, pipelines
+from sklearn.model_selection import train_test_split, GridSearchCV, RandomizedSearchCV, KFold
+from sklearn.datasets import make_classification
+from sklearn.preprocessing import StandardScaler
+from sklearn.pipeline import Pipeline
+from sklearn.inspection import permutation_importance
+from sklearn.compose import ColumnTransformer, make_column_selector
+from sklearn.inspection import PartialDependenceDisplay
+# Metrics
+from sklearn.metrics import f1_score, confusion_matrix, ConfusionMatrixDisplay, average_precision_score, PrecisionRecallDisplay, roc_curve, RocCurveDisplay
+# Calibration time
+import time
+```
+
+```{python id="fyhF0xTJp_59"}
+nba = pd.read_csv('NBA_Aggregated_Dataset.csv')
+```
+
+<!-- #region id="d1362985" -->
+The NBA dataset contains statistics on NBA players from 2001 to 2022. Features include games played, points per game, steals per game, etc. The problem of interest is to classify players' positions based on their stats. 
+<!-- #endregion -->
+
+```{python colab={'base_uri': 'https://localhost:8080/', 'height': 383}, id="20838236", outputId="f1f8c545-cb46-4280-bc05-8077975ed839"}
+nba.head()
+```
+
+```{python colab={'base_uri': 'https://localhost:8080/'}, id="83efa7df", outputId="92610dea-41d0-4dc2-d4eb-aa6dad1af957"}
+nba.info()
+```
+
+<!-- #region id="e405909e" -->
+It looks like reading in the csv includes some empty columns from Excel, which we will want to drop later. 
+<!-- #endregion -->
+
+```{python colab={'base_uri': 'https://localhost:8080/'}, id="f4fad042", outputId="43d8e74c-debc-4b86-a877-0af1a6c6cc2d"}
+nba['POS'].unique()
+```
+
+```{python colab={'base_uri': 'https://localhost:8080/', 'height': 627}, id="884e6ff6", outputId="ed82c78a-2302-4001-fb3d-e7a3e84e7ee5"}
+nba[nba['POS'].isnull()]
+```
+
+<!-- #region id="5eec2571" -->
+The target variable is POS (position). The only missing value for POS is for Eddy Curry, who, with a bit of research, can confirm plays as C (center). 
+<!-- #endregion -->
+
+```{python id="7cb6b525"}
+nba['POS'].fillna('C', inplace=True)
+```
+
+```{python colab={'base_uri': 'https://localhost:8080/'}, id="8ed94eea", outputId="ae738e18-a075-4c2c-e66e-e2fe9abd6a69"}
+nba['POS'].unique()
+```
+
+<!-- #region id="9db47d5b" -->
+The different positions are as follows:  
+- SG: shooting guard
+- C: center
+- SF: small forward
+- G: guard ? 
+- F: forward ?
+- PF: power forward
+- PG: point guard
+- GF: guard/forward.
+The classification problem of interest is to predict whether players are a forward (SF, PF, or C) or a guard (PG, SG).  
+Let 1 represent forwards and 0 represent guards. To avoid ambiguity about guard forwards, who can play both positions, we will drop rows with 'GF' values. This only removes 4 rows corresponding to seasons for the single GF player Jiri Welsch.
+<!-- #endregion -->
+
+```{python id="tPvF4IfBpeIm"}
+nba = nba.drop(nba[nba.POS == 'GF'].index)
+```
+
+```{python colab={'base_uri': 'https://localhost:8080/'}, id="76580e64", outputId="8a622614-de9b-4c34-ce56-9c8b8576f5af"}
+positions = {'SG' : 0, 'C' : 1, 'SF' : 1, 'G' : 0,
+            'F': 1, 'PF': 1, 'PG': 0}
+  
+# Assign every player into one of two classes
+nba_binary = nba.replace({"POS": positions})
+nba_binary['POS'].unique()
+```
+
+```{python colab={'base_uri': 'https://localhost:8080/', 'height': 383}, id="bfbcb252", outputId="87c18728-1d73-4971-b870-c265cc94647e"}
+nba_binary.head()
+```
+
+```{python id="ea669d34"}
+# Drop the excess columns
+list(nba_binary)[22:43]
+nba_binary = nba_binary.drop(list(nba_binary)[22:43], axis=1)
+```
+
+```{python colab={'base_uri': 'https://localhost:8080/', 'height': 394}, id="k-MA4_IaPy2U", outputId="09ed4c0f-ad63-47a0-b5f4-c8fed4cdf043"}
+nba_binary.describe()
+```
+
+```{python colab={'base_uri': 'https://localhost:8080/'}, id="sdL5l7cjjBE9", outputId="10c32a7e-2db9-4015-88e2-a63e7d8a320b"}
+nba_binary = nba_binary[nba_binary['SEASON'] != '2011-2012'] # Remove the lockout season
+nba_binary['POS'].value_counts() # 5666 forwards, 3923 guards (2/3 imbalance)
+```
+
+```{python id="wlnDWaVWRcxy"}
+# Feature engineering
+nba_binary["2PA"] = nba_binary["FGA"] - nba_binary["3PA"]
+nba_binary["2PM"] = nba_binary["FGM"] - nba_binary["3PM"]
+nba_binary["2P%"] = nba_binary["2PM"]/nba_binary["2PA"]
+nba_binary['2P%'] = nba_binary['2P%'].fillna(0)
+nba_binary['2P%'] = nba_binary['2P%'].clip(upper=1)
+```
+
+```{python colab={'base_uri': 'https://localhost:8080/'}, id="IsIsquLJReJf", outputId="2dbf4f01-3ed1-4eb4-cdfe-f16e86c381ac"}
+nba_binary.head
+```
+
+<!-- #region id="fd549714" -->
+We propose the following classifiers:
+- Support Vector Machines
+- Random Forests
+- Combined SVM with tree bagging
+<!-- #endregion -->
+
+```{python colab={'base_uri': 'https://localhost:8080/'}, id="Tq5jAGZSb9In", outputId="8f83da66-e24f-44cc-e6ba-bfaa85841fab"}
+nba_binary.shape
+```
+
+```{python colab={'base_uri': 'https://localhost:8080/'}, id="P-b_6fyxcBdP", outputId="9c391424-63bb-461e-ab98-e1dd250c08f6"}
+nba_forward = nba_binary[nba_binary['POS'] == 1]
+nba_guard = nba_binary[nba_binary['POS'] == 0]
+nba_forward.shape, nba_guard.shape
+```
+
+```{python colab={'base_uri': 'https://localhost:8080/', 'height': 533}, id="VSACSjw2cEke", outputId="d4056960-bfc9-437b-913f-620f798b194a"}
+SEASON_BINS = nba_binary['SEASON'].unique()
+
+fig, ax = plt.subplots()
+ax.hist(nba_forward['SEASON'], SEASON_BINS, alpha=0.5, label='forward')
+ax.hist(nba_guard['SEASON'], SEASON_BINS, alpha=0.5, label='guard')
+ax.legend()
+ax.set_title('SEASON distribution')
+ax.set(xlabel='SEASON', ylabel='frequency')
+ax.tick_params(labelrotation=90)
+```
+
+```{python colab={'base_uri': 'https://localhost:8080/'}, id="eAXh8pM2cIOX", outputId="3bb8f55c-be63-416e-dddc-7ce1526ee954"}
+# omitting distribution for NAME since there's a lot of unique names
+nba_binary['NAME'].unique().shape
+```
+
+```{python colab={'base_uri': 'https://localhost:8080/', 'height': 1000}, id="G5KJgD04cKdo", outputId="33b0c9dd-bdbf-426c-9e28-607b00b46d3c"}
+numeric_features = nba_binary.columns[3:]
+nfeatures = len(numeric_features);
+ncol = np.sqrt(nfeatures).astype(int)
+nrow = ncol + 1
+fix, axs = plt.subplots(nrow, ncol, figsize=(5*ncol, 5*nrow))
+for r in range(nrow):
+    for c in range(ncol):
+        if ncol*r+c < nfeatures:
+            feature = numeric_features[ncol*r+c]
+            axs[r, c].boxplot([nba_forward[feature], nba_guard[feature]])
+            axs[r, c].set_xticklabels(['forward', 'guard'])
+            axs[r, c].set_title(feature)
+            axs[r, c].set(xlabel='POS', ylabel='frequency')
+
+```
+
+```{python colab={'base_uri': 'https://localhost:8080/', 'height': 423}, id="j2KgBNVOC6FP", outputId="cf501e18-d0ec-4021-bb14-76ff7cc0a9bc"}
+import plotly.express as px
+df = nba_binary.copy()
+df['GP_PCT']  = df['GP']/max(df['GP'])
+df['MIN_PCT'] = df['MIN']/max(df['MIN'])
+df['PTS_PCT'] = df['PTS']/max(df['PTS'])
+df['FGM_PCT'] = df['FGM']/max(df['FGM'])
+df['FGA_PCT'] = df['FGA']/max(df['FGA'])
+df['FG%_PCT'] = df['FG%']/max(df['FG%'])
+df['3PM_PCT'] = df['3PM']/max(df['3PM'])
+df['3PA_PCT'] = df['3PA']/max(df['3PA'])
+df['3P%_PCT'] = df['3P%']/max(df['3P%'])
+df['FTM_PCT'] = df['FTM']/max(df['FTM'])
+df['FTA_PCT'] = df['FTA']/max(df['FTA'])
+df['FT%_PCT'] = df['FT%']/max(df['FT%'])
+df['REB_PCT'] = df['REB']/max(df['REB'])
+df['AST_PCT'] = df['AST']/max(df['AST'])
+df['STL_PCT'] = df['STL']/max(df['STL'])
+df['BLK_PCT'] = df['BLK']/max(df['BLK'])
+df['TO_PCT']  = df['TO']/max(df['TO'])
+df['DD2_PCT'] = df['DD2']/max(df['DD2'])
+df['TD3_PCT'] = df['TD3']/max(df['TD3'])
+column_names = list(df.columns.values)
+#column_names
+agg_radar_df = df[['POS', 'REB_PCT', 'AST_PCT', 'PTS_PCT', 'BLK_PCT', '3PM_PCT']]
+agg_radar_df
+```
+
+```{python colab={'base_uri': 'https://localhost:8080/', 'height': 187}, id="Jre7rX3eXkUk", outputId="fbac4231-4cf2-460b-9641-4fe749432982"}
+full_grouped_df = df[['POS', 'GP_PCT', 'MIN_PCT', 'PTS_PCT', 'FGM_PCT', 'FGA_PCT',
+                      'FG%_PCT', '3PM_PCT', '3PA_PCT', '3P%_PCT', 'FTM_PCT', 'FTA_PCT',
+                      'FT%_PCT', 'REB_PCT', 'AST_PCT', 'STL_PCT', 'BLK_PCT', 'TO_PCT', 'DD2_PCT', 'TD3_PCT']]
+full_grouped_df = full_grouped_df.groupby(['POS']).mean()
+full_grouped_df
+```
+
+```{python colab={'base_uri': 'https://localhost:8080/', 'height': 143}, id="beIILQyRExUJ", outputId="facc7e86-47b8-4a02-ccc9-d6e1073cf611"}
+plotly_df = agg_radar_df.groupby(['POS']).mean()
+plotly_df
+```
+
+```{python colab={'base_uri': 'https://localhost:8080/', 'height': 597}, id="V5SupkmxFKyb", outputId="af0c33cf-bf12-4ea7-94e7-39b0c54a7ea6"}
+guard_player = pd.DataFrame(dict(
+    stats=plotly_df.iloc[0].to_numpy(),
+    features=['REB_PCT', 'AST_PCT', 'PTS_PCT', 'BLK_PCT', '3PM_PCT']))
+fig = px.line_polar(guard_player, r='stats', theta='features', line_close=True)
+fig.update_layout(title='Guard Statistics')
+fig.show()
+```
+
+```{python colab={'base_uri': 'https://localhost:8080/', 'height': 611}, id="AxT7ZOrOFxhQ", outputId="6b910e1d-cae9-4b7f-f513-e12c4683cbca"}
+forward_player = pd.DataFrame(dict(
+    stats=plotly_df.iloc[1].to_numpy(),
+    features=['REB_PCT', 'AST_PCT', 'PTS_PCT', 'BLK_PCT', '3PM_PCT']))
+fig2 = px.line_polar(forward_player, r='stats', theta='features', line_close=True)
+fig.update_layout(title='Forward Statistics')
+fig2.show()
+```
+
+<!-- #region id="9s4FNJCTZ98I" -->
+# 2022-2023 Season
+<!-- #endregion -->
+
+```{python id="j0rM0od_aCTC"}
+nba_recent = pd.read_csv('2022-2023_NBA_Data.csv')
+```
+
+```{python colab={'base_uri': 'https://localhost:8080/'}, id="vsTiM1yyacJ8", outputId="3c0a1b06-bce3-4d9a-d20e-f94e78891df0"}
+nba_recent['POS'].unique()
+```
+
+```{python colab={'base_uri': 'https://localhost:8080/', 'height': 79}, id="PG_i7MLkajvt", outputId="5fc8d911-aa3c-40e7-e5b8-0db8ab6d4f1b"}
+nba_recent[nba_recent['POS'].isnull()]
+```
+
+```{python colab={'base_uri': 'https://localhost:8080/'}, id="Jr9DQrmT0YFN", outputId="a2d1c060-ae1c-4ee8-e43c-2c0b6b7782d8"}
+nba_recent.info
+```
+
+```{python colab={'base_uri': 'https://localhost:8080/', 'height': 235}, id="jrglS5rja6Z3", outputId="0a069665-f7eb-4bab-c457-7bafce257f71"}
+nba_recent.head()
+```
+
+```{python colab={'base_uri': 'https://localhost:8080/'}, id="456hgg_RcZIy", outputId="5e7e790f-c47c-41b5-f6a0-135959e819e2"}
+# Assign every player into one of two classes
+nba_recent = nba_recent.replace({"POS": positions})
+nba_recent['POS'].unique()
+```
+
+```{python colab={'base_uri': 'https://localhost:8080/'}, id="uK0JLqM2E0wo", outputId="46aa0430-9e48-46d8-f3d8-5a22f070ac85"}
+nba_recent['POS'].value_counts() # 295 forwards, 239 guards
+```
+
+```{python id="5DyrrRhOSu07"}
+nba_recent["2PA"] = nba_recent["FGA"] - nba_recent["3PA"]
+nba_recent["2PM"] = nba_recent["FGM"] - nba_recent["3PM"]
+nba_recent["2P%"] = nba_recent["2PM"]/nba_recent["2PA"]
+nba_recent['2P%'] = nba_recent['2P%'].fillna(0)
+nba_recent['2P%'] = nba_recent['2P%'].clip(upper=1)
+```
+
+# Feature Selection
+
+```{python}
+nba_X = nba_binary.drop(columns = ["POS", "NAME", "SEASON"])
+nba_y = nba_binary["POS"]
+```
+
+```{python colab={'base_uri': 'https://localhost:8080/', 'height': 490}, id="CNIRDoZpoOIT", outputId="3be480e9-bd51-472c-8cd6-31cf2a63d35f"}
+from sklearn.feature_selection import SelectKBest
+from sklearn.feature_selection import mutual_info_classif
+
+# Compute mutual information between each feature and target variable
+mutual_info = mutual_info_classif(nba_X, nba_y, random_state=42)
+
+# Plot mutual information scores for each feature
+fig, ax = plt.subplots()
+ax.bar(range(nba_X.shape[1]), mutual_info)
+ax.set_xticks(range(nba_X.shape[1]))
+ax.set_xticklabels(nba_X.columns, rotation=90)
+ax.set_xlabel("Feature")
+ax.set_ylabel("Mutual Information")
+ax.set_title("Mutual Information Scores for NBA players")
+plt.show()
+```
+
+```{python colab={'base_uri': 'https://localhost:8080/'}, id="eqU9kdhJlkK_", outputId="1b71869a-a2ed-477e-b456-95f0899aec55"}
+# Perform feature selection with mutual information
+selector = SelectKBest(mutual_info_classif, k=10)
+X_new = selector.fit_transform(nba_X, nba_y)
+
+# Get the indices of the selected features
+selected_features_indices = selector.get_support(indices=True)
+
+# Print the indices of the selected features
+print("Indices of selected features:", selected_features_indices)
+selected_features = nba_X.columns[selected_features_indices]
+selected_features
+```
+
+```{python}
+train_X = nba_binary[selected_features].to_numpy()
+train_y = nba_binary["POS"].to_numpy()
+test_X = nba_recent[selected_features].to_numpy()
+test_y = nba_recent["POS"].to_numpy()
+```
+
+<!-- #region id="tGSGgeaPN5ot" -->
+# A single Decision Tree model
+
+Let's visualize the splits of a decision tree trained on the 2 most important features found by bagging: REB and AST.
+<!-- #endregion -->
+
+```{python}
+tuned_tree = tree.DecisionTreeClassifier(
+    criterion = 'log_loss',
+    min_samples_split = 8,
+    min_samples_leaf = 1,
+    max_features = 'log2',
+    max_depth = 10,
+    random_state = 41
+)
+
+tuned_bagging = BaggingClassifier(estimator = tuned_tree, random_state = 41)
+tuned_bagging.fit(train_X, train_y)
+```
+
+```{python id="Qnaq_RGPNxpQ"}
+from sklearn.inspection import DecisionBoundaryDisplay
+import matplotlib.patches as mpatches
+```
+
+```{python colab={'base_uri': 'https://localhost:8080/', 'height': 1000}, id="3_xuS1OrN_KK", outputId="003f931a-227f-4e6d-f817-a2a430ce94c1"}
+reb_ast_axes = np.where(np.logical_or(selected_features == 'REB', selected_features == 'AST'))[0]
+tuned_tree.fit(train_X[:,reb_ast_axes], train_y)
+plt.figure(figsize=(20,10))
+tree.plot_tree(tuned_tree, max_depth=2)
+```
+
+```{python colab={'base_uri': 'https://localhost:8080/'}, id="VlJl9kAwN_RM", outputId="bce2d53d-6bca-4ece-ffd2-38863e246a74"}
+y_pred_tree = tuned_tree.predict(train_X[:,reb_ast_axes])
+print("Decision Tree train error: {}".format(
+    np.mean(y_pred_tree != train_y)
+))
+```
+
+```{python colab={'base_uri': 'https://localhost:8080/'}, id="kP6_UNxiN_Tl", outputId="3b7f751c-7025-4546-d2eb-23b614602197"}
+y_pred_tree = tuned_tree.predict(test_X[:,reb_ast_axes])
+print("Decision Tree test error: {}".format(
+    np.mean(y_pred_tree != test_y)
+))
+```
+
+```{python}
+def plotDecisionBoundary2D(model, X, y, **predict_params):
+    feature_1, feature_2 = np.meshgrid(
+        np.linspace(X[:, 0].min(), X[:, 0].max(), num=400),
+        np.linspace(X[:, 1].min(), X[:, 1].max(), num=400)
+    )
+    grid = np.vstack([feature_1.ravel(), feature_2.ravel()]).T
+    y_pred = np.reshape(model.predict(grid, **predict_params), feature_1.shape)
+    display = DecisionBoundaryDisplay(
+        xx0=feature_1, xx1=feature_2, response=y_pred
+    )
+    display.plot()
+    yellow_patch = mpatches.Patch(color='yellow', label='forward')
+    purple_patch = mpatches.Patch(color='purple', label='guard')
+    display.ax_.legend(handles=[yellow_patch, purple_patch])
+    display.plot()
+    display.ax_.scatter(X[:, 0], X[:, 1], c=y, edgecolor="black", alpha=0.5)
+    return display
+```
+
+```{python colab={'base_uri': 'https://localhost:8080/', 'height': 862}, id="VAQm8g9PN_Xh", outputId="1c6dacbb-1105-48b2-c05f-93d7b974435f"}
+display = plotDecisionBoundary2D(tuned_tree, train_X[:,reb_ast_axes], train_y)
+display.ax_.set(xlabel='REB', ylabel='AST')
+plt.show()
+```
+
+<!-- #region id="nElFNgh0OS1F" -->
+## Now visualize the first 2 splits of a decision tree trained on the full data:
+<!-- #endregion -->
+
+```{python colab={'base_uri': 'https://localhost:8080/', 'height': 544}, id="VFYWeX4AORZG", outputId="f1bf0b7c-0ca3-48c4-8a32-eadea46b3c5e"}
+tuned_tree.fit(train_X, train_y)
+plt.figure(figsize=(10,5))
+tree.plot_tree(tuned_tree, max_depth=1)
+```
+
+```{python colab={'base_uri': 'https://localhost:8080/'}, id="BesNPhC_OROW", outputId="5d55f8e7-a354-4055-8249-4a2bc0437a7b"}
+y_pred_tree = tuned_tree.predict(train_X)
+print("Decision Tree train error: {}".format(
+    np.mean(y_pred_tree != train_y)
+))
+```
+
+```{python colab={'base_uri': 'https://localhost:8080/'}, id="_NRKwkSoN_fS", outputId="244dec04-b348-4833-f16f-d633876a639c"}
+y_pred_tree = tuned_tree.predict(test_X)
+print("Decision Tree test error: {}".format(
+    np.mean(y_pred_tree != test_y)
+))
+```
+
+```{python colab={'base_uri': 'https://localhost:8080/', 'height': 504}, id="7BWbHe8mN_jx", outputId="b53f3b99-5bad-41a0-c769-cfb8eda9aa4f"}
+fig, ax = plt.subplots(1, 3, figsize=(3*5, 1*5))
+ax[0].scatter(nba_forward['3PM'], nba_forward['FGA'], alpha=0.1, label='forward')
+ax[0].scatter(nba_guard['3PM'], nba_guard['FGA'], alpha=0.1, label='guard')
+ax[0].axvline(x = 0.05, color='r', label = '3PM split')
+ax[0].legend()
+ax[0].set_title('First split')
+ax[0].set(xlabel='3PM', ylabel='FGA')
+
+ax[1].scatter(nba_forward[nba_forward['3PM'] <= 0.05]['FGA'], nba_forward[nba_forward['3PM'] <= 0.05]['3PM'], alpha=0.1, label='forward')
+ax[1].scatter(nba_guard[nba_guard['3PM'] <= 0.05]['FGA'], nba_guard[nba_guard['3PM'] <= 0.05]['3PM'], alpha=0.1, label='guard')
+ax[1].axvline(x = 2.65, color='r', label = 'FGA split')
+ax[1].legend()
+ax[1].set_title('Second split')
+ax[1].set(xlabel='FGA', ylabel='3PM')
+
+ax[2].scatter(nba_forward[nba_forward['3PM'] > 0.05]['3PA'], nba_forward[nba_forward['3PM'] > 0.05]['3PM'], alpha=0.1, label='forward')
+ax[2].scatter(nba_guard[nba_guard['3PM'] > 0.05]['3PA'], nba_guard[nba_guard['3PM'] > 0.05]['3PM'], alpha=0.1, label='guard')
+ax[2].axvline(x = 0.75, color='r', label = '3PA split')
+ax[2].legend()
+ax[2].set_title('Second split')
+ax[2].set(xlabel='3PA', ylabel='3PM')
+```
+
+<!-- #region id="3k9fnZnGOkJu" -->
+# Hybrid SVM and Tree model
+
+Construct a classification tree using SVM hyerplane splits of the data at each node. The stopping criterion is when the misclassification error in a region is at most `max_miss` or the size of a region doesn't change. All SVM splits use the same parameter `C`. Boosting is performed on misclassified points at each node of the tree except the root. When boosting, misclassified points are assigned weight `boost_strength` * (1 + proportion of correctly classified points).
+<!-- #endregion -->
+
+```{python id="NH2WXBWNOlOZ"}
+def project(v, u):
+    return np.dot(v, u) / np.dot(u, u) * u
+
+def rotation_mat2D(v1, v2):
+    return np.c_[v1/np.linalg.norm(v1), v2/np.linalg.norm(v2)].T
+
+def standardized_svm(kernel, **kwargs):
+    if kernel == 'linear': # LinearSVC faster than SVC
+        return Pipeline(
+            steps=[("scaler", StandardScaler()), 
+                   ("model", svm.LinearSVC(class_weight='balanced', dual=False, max_iter=10000, random_state=41, **kwargs))]
+        )
+    return Pipeline(
+        steps=[("scaler", StandardScaler()), 
+               ("model", svm.SVC(kernel=kernel, class_weight='balanced', random_state = 41, **kwargs))]
+    )
+
+class SVMTree:
+    def __init__(self, kernel, C, max_miss, boost_strength, depth=0):
+        self.kernel = kernel
+        self.C = C
+        self.max_miss = max_miss
+        self.boost_strength = boost_strength
+        self.depth = depth
+        self.height = 0
+        self.model_svm = None
+        self.parent = None
+        self.pos = None
+        self.neg = None
+        self.X = None
+        self.y = None
+    
+    def fit_svm(self, X, y, sample_weight):
+#         print("Begin SVM")
+        model_svm = standardized_svm(kernel=self.kernel, C=self.C)
+#         try:
+#             model_svm = standardized_svm(kernel=self.kernel)
+#             cv = KFold(
+#                 n_splits=5, 
+#                 shuffle=True 
+#             )
+#             svm_grid = {'model__C': [0.1, 1, 10, 100, 1000]}
+#             cv_svm = GridSearchCV(
+#                 estimator = model_svm,
+#                 param_grid = svm_grid,
+#                 n_jobs = -1,
+#                 cv = cv,
+#                 verbose = 4
+#             )
+#             cv_svm.fit(X, y, model__sample_weight=sample_weight)
+#             print(cv_svm.best_params_)
+#             model_svm = standardized_svm(
+#                 kernel=self.kernel,
+#                 C=cv_svm.best_params_['model__C'])
+#         except:
+#             print("Not enough samples for CV, falling back to C=1")
+#             model_svm = standardized_svm(kernel=self.kernel)
+        model_svm.fit(X, y, model__sample_weight=sample_weight)
+        self.svm = model_svm
+        return model_svm
+
+    def fit(self, X, y, sample_weight=None):
+#         print(f"level {self.depth}")
+        self.X = X
+        self.y = y
+        self.fit_svm(X, y, sample_weight)
+        pos = self.svm.predict(X) == 1
+        neg = np.logical_not(pos)
+        if len(y[pos]) == len(y) or len(y[neg]) == len(y):
+            return
+        pos_count = np.bincount(y[pos])
+        neg_count = np.bincount(y[neg])
+        if (len(y[pos]) > 0) and (len(pos_count) > 1) and (pos_count[0] / pos_count.sum() > self.max_miss) and (pos_count.min() > 0):
+#             print(f"positive region count: {pos_count[1]} true positives out of {len(y[pos])} total")
+            self.pos = SVMTree(self.kernel, self.C, self.max_miss, self.boost_strength, self.depth+1)
+            self.pos.parent = self
+            pos_boost_multiplier = self.boost_strength * (1 + pos_count[1] / pos_count.sum())
+            self.pos.fit(X[pos], y[pos], [pos_boost_multiplier if val == 0 else 1 for val in y[pos]])
+        if (len(y[neg]) > 0) and (len(neg_count) > 1) and (neg_count[1] / neg_count.sum() > self.max_miss) and (neg_count.min() > 0):
+#             print(f"negative region count: {neg_count[0]} true negatives out of {len(y[neg])} total")
+            self.neg = SVMTree(self.kernel, self.C, self.max_miss, self.boost_strength, self.depth+1)
+            self.neg.parent = self
+            neg_boost_multiplier = self.boost_strength * (1 + neg_count[0] / neg_count.sum())
+            self.neg.fit(X[neg], y[neg], [neg_boost_multiplier if val == 1 else 1 for val in y[neg]])
+        if self.pos is not None and self.neg is not None:
+            self.height = max(self.pos.height, self.neg.height) + 1
+        elif self.pos is not None:
+            self.height = self.pos.height + 1
+        elif self.neg is not None:
+            self.height = self.neg.height + 1
+    
+    def predict(self, X, recurse=True):
+        pred = self.svm.predict(X)
+        if not recurse:
+            return pred
+        pos = pred == 1
+        neg = np.logical_not(pos)
+        if pos.any() and self.pos is not None:
+            pred[pos] = self.pos.predict(X[pos, :])
+        if neg.any() and self.neg is not None:
+            pred[neg] = self.neg.predict(X[neg, :])
+        return pred
+    
+    def getWeights(self):
+        return self.svm.named_steps['model'].intercept_, self.svm.named_steps['model'].coef_
+    
+    def plot(self):
+        intercept, coef = self.getWeights()
+        displacement_vec = -intercept / np.dot(coef[0], coef[0]) * coef[0]
+        normal_vec = coef[0]
+        # find a projection_vec orthogonal to normal_vec to make the 2nd axis of the plot
+        indep_vec = normal_vec.copy()
+        indep_vec[normal_vec.nonzero()[0][0]] = 0
+        projection_vec = indep_vec - project(indep_vec, normal_vec)
+
+        nfeatures = self.X.shape[1]
+        if nfeatures > 2:
+            # projection matrix onto space spanned by normal_vec and projection_vec
+            P = np.identity(nfeatures)
+            for col in range(nfeatures):
+                P[:, col] = project(P[:, col], normal_vec) + project(P[:, col], projection_vec)
+
+            # SVD select top 2 influential axes for plotting
+            u, s, vh = np.linalg.svd(P)
+            axes = np.logical_or(np.arange(nfeatures)==0, np.arange(nfeatures)==1)
+            s[np.logical_not(axes)] = 0
+            H = np.matmul(np.diag(s), vh)[axes,:]
+            principle_axes = np.matmul(H, np.c_[normal_vec, projection_vec])
+            R = rotation_mat2D(principle_axes[:, 0], principle_axes[:, 1])
+            H = np.matmul(R, H)
+        else:
+            H = rotation_mat2D(normal_vec, projection_vec)
+
+        x = np.matmul(self.svm.named_steps['scaler'].transform(self.X), H.T)
+
+        hyperplane = np.matmul(H, displacement_vec)
+        
+        fig, ax = plt.subplots()
+        ax.scatter(x[:,0], x[:,1], c=self.y, alpha=0.1)
+        yellow_patch = mpatches.Patch(color='yellow', label='forward')
+        purple_patch = mpatches.Patch(color='purple', label='guard')
+        line = ax.axvline(x=hyperplane[0], color='r', label='SVM hyperplane split')
+        ax.legend(handles=[yellow_patch, purple_patch, line])
+        ax.set_title('Projection plot perpendicular to hyperplane')
+        ax.set(xlabel='Span of weight vector')
+    
+    def plotBacktrack(self):
+        if self.parent is not None:
+            self.parent.plotBacktrack()
+        self.plot()
+```
+
+<!-- #region id="02iUAUFJOr47" -->
+## Fit SVM Tree on 2 features:
+<!-- #endregion -->
+
+```{python colab={'base_uri': 'https://localhost:8080/'}, id="pkEE_Ga6OtMu", outputId="329b7bbb-c896-40e5-cb0a-54ac0b7f84b2"}
+model_hybrid = SVMTree("linear", 1, 0.1, 1)
+
+start_time = time.perf_counter()
+
+model_hybrid.fit(train_X[:,reb_ast_axes], train_y)
+
+end_time = time.perf_counter()
+runtime = end_time - start_time
+```
+
+```{python colab={'base_uri': 'https://localhost:8080/'}, id="GRjswSIKOtc-", outputId="1a06cea2-6b13-48d4-b861-33086dfed240"}
+print(f"Runtime: {runtime:.6f} seconds")
+model_hybrid.height
+```
+
+```{python colab={'base_uri': 'https://localhost:8080/'}, id="u81wvLeeOtf_", outputId="158ead0a-3e8f-4326-cbce-ca4b3053c0db"}
+y_pred_hybrid = model_hybrid.predict(train_X[:,reb_ast_axes])
+print("Hybrid train error: {}".format(
+    np.mean(y_pred_hybrid != train_y)
+))
+```
+
+```{python colab={'base_uri': 'https://localhost:8080/'}, id="NsFRgiNXO3kS", outputId="612370da-ca79-4e22-8c37-2d3bfffc11b5"}
+y_pred_hybrid = model_hybrid.predict(test_X[:,reb_ast_axes])
+print("Hybrid test error: {}".format(
+    np.mean(y_pred_hybrid != test_y)
+))
+```
+
+```{python colab={'base_uri': 'https://localhost:8080/', 'height': 862}, id="bsVJBiJxO53b", outputId="89dcb366-9e96-4078-bb2c-4a02c1a9bd6b"}
+display = plotDecisionBoundary2D(model_hybrid, train_X[:,reb_ast_axes], train_y)
+display.ax_.set(xlabel='REB', ylabel='AST')
+plt.show()
+```
+
+```{python colab={'base_uri': 'https://localhost:8080/', 'height': 1000}, id="2iBiCIuXO-47", outputId="777d3a32-2875-4f32-c5f9-b5335e182ba1"}
+model_hybrid.neg.plotBacktrack()
+```
+
+# CV Grid Search
+
+```{python}
+def CVgrid(k_folds, model_factory, hyperparameters, X, y, score_fn):
+    np.random.seed(42)
+    params = np.meshgrid(*hyperparameters.values())
+    grid = np.vstack([param.ravel() for param in params]).T
+    best_hyp = grid[0]
+    best_score = np.inf
+    scores = np.zeros(grid.shape[0])
+    rand_indices = np.random.permutation(X.shape[0])
+    X_folds = np.array_split(X[rand_indices,:], k_folds)
+    y_folds = np.array_split(y[rand_indices], k_folds)
+    for idx, hyp in enumerate(grid):
+        score = []
+        for i in range(k_folds):
+            val_X = X_folds[i]
+            val_y = y_folds[i]
+            train_X = np.vstack([X_folds[k] for k in range(k_folds) if k != i])
+            train_y = np.hstack([y_folds[k] for k in range(k_folds) if k != i])
+            model = model_factory(hyp)
+            model.fit(train_X, train_y)
+            score.append(score_fn(model.predict(val_X), val_y))
+        scores[idx] = np.mean(score)
+        print(f'hyp: {hyp}, score: {scores[idx]}')
+    best_score = np.max(scores)
+    best_hyp = {k:v for k, v in zip(hyperparameters.keys(), grid[np.argmax(scores)])}
+    summary = np.c_[grid, scores]
+    print(summary)
+    print(f'best_hyp: {best_hyp}, best_score: {best_score}')
+    return best_hyp, best_score, summary
+```
+
+```{python}
+start_time = time.perf_counter()
+best_hyp, best_score, summary = CVgrid(
+    k_folds=5,
+    model_factory=lambda hyp: SVMTree('linear', *hyp),
+    hyperparameters={'C':[0.1, 1, 10, 100], 'max_miss':[0.001, 0.01, 0.1], 'boost_strength':[1, 10, 100, 1000]},
+    X=train_X,
+    y=train_y,
+    score_fn=lambda pred, actual: np.mean(pred == actual)
+)
+end_time = time.perf_counter()
+runtime = end_time - start_time
+print(f"Runtime: {runtime:.6f} seconds")
+```
+
+<!-- #region id="KsHZMD06PC7t" -->
+## Fit SVM Tree on full dataset:
+<!-- #endregion -->
+
+```{python colab={'base_uri': 'https://localhost:8080/'}, id="Wtq0SlNJO_3R", outputId="985f505d-c968-47cb-b87b-0321b1968130"}
+model_svm_tree = SVMTree(kernel="linear", **best_hyp)
+
+start_time = time.perf_counter()
+
+model_svm_tree.fit(train_X, train_y)
+
+end_time = time.perf_counter()
+runtime = end_time - start_time
+```
+
+```{python colab={'base_uri': 'https://localhost:8080/'}, id="nVmsp4D7PHQI", outputId="44c00ed0-8374-4c9d-ac29-d963806a6552"}
+print(f"Runtime: {runtime:.6f} seconds")
+model_svm_tree.height
+```
+
+```{python colab={'base_uri': 'https://localhost:8080/'}, id="Y-D7qxjyPH_4", outputId="a41fdf3f-45eb-4e05-e945-68a621886d66"}
+y_pred_svm_tree = model_svm_tree.predict(train_X)
+print("SVM Tree train error: {}".format(
+    np.mean(y_pred_svm_tree != train_y)
+))
+```
+
+```{python colab={'base_uri': 'https://localhost:8080/'}, id="sIrFs98lPKz8", outputId="9fe311ea-4707-481f-dea2-3f8e73f96f49"}
+y_pred_svm_tree = model_svm_tree.predict(test_X)
+print("SVM Tree test error: {}".format(
+    np.mean(y_pred_svm_tree != test_y)
+))
+```
+
+```{python colab={'base_uri': 'https://localhost:8080/', 'height': 1000}, id="I2iyUtjRPNKT", outputId="ffe58ce4-90e4-4603-8e63-f66d6e0ffcd5"}
+model_svm_tree.neg.pos.plotBacktrack()
+```
+
+```{python colab={'base_uri': 'https://localhost:8080/', 'height': 449}, id="LBtXDLVZPSjp", outputId="5bca32b9-5dfd-4d65-8c25-061bbcb55e7f"}
+cm = confusion_matrix(test_y, y_pred_svm_tree)
+positions = ["Guard", "Forward"]
+c_matrix = ConfusionMatrixDisplay(cm, display_labels = positions).plot()
+```
+
+<!-- #region id="egxvqLDLPWAX" -->
+# Bagging SVM Trees
+<!-- #endregion -->
+
+```{python id="Jl_NryYpPWxX"}
+class BaggedSVMTree:
+    def __init__(self, n_models, **kwargs):
+        self.models = [SVMTree(**kwargs) for i in range(n_models)]
+        self.X = None
+        self.y = None
+
+    def fit(self, X, y):
+        np.random.seed(42)
+        bootstrap_indices = [np.random.randint(X.shape[0], size=X.shape[0]) for i in range(len(self.models))]
+        self.X = [X[indices, :] for indices in bootstrap_indices]
+        self.y = [y[indices] for indices in bootstrap_indices]
+        for model, X, y in zip(self.models, self.X, self.y):
+            model.fit(X, y)
+    
+    def predict(self, X): # majority vote
+        return (np.vstack([model.predict(X) for model in self.models]).mean(axis=0) > 0.5).astype(int)
+```
+
+```{python}
+start_time = time.perf_counter()
+best_hyp, best_score, summary = CVgrid(
+    k_folds=5,
+    model_factory=lambda hyp: BaggedSVMTree(n_models=10, kernel='linear', C=hyp[0], max_miss=hyp[1], boost_strength=hyp[2]),
+    hyperparameters={
+        'C':[0.1, 1, 10, 100, 1000],
+        'max_miss':[0.001, 0.01, 0.1, 0.2],
+        'boost_strength':[1, 10, 100]
+    },
+    X=train_X,
+    y=train_y,
+    score_fn=lambda pred, actual: np.mean(pred == actual)
+)
+end_time = time.perf_counter()
+runtime = end_time - start_time
+print(f"Runtime: {runtime:.6f} seconds")
+```
+
+```{python colab={'base_uri': 'https://localhost:8080/'}, id="e2xilak9Pzae", outputId="ceb8e35b-c60f-4700-a1c0-dd8aca4b7284"}
+model_bagged_svm_tree = BaggedSVMTree(n_models=30, kernel='linear', **best_hyp)
+
+start_time = time.perf_counter()
+
+model_bagged_svm_tree.fit(train_X, train_y)
+
+end_time = time.perf_counter()
+runtime = end_time - start_time
+```
+
+```{python colab={'base_uri': 'https://localhost:8080/'}, id="vDzIr8h5PzQa", outputId="034e1d7a-1ffc-49a8-8c5d-b86f9779a5e4"}
+print(f"Runtime: {runtime:.6f} seconds")
+[model.height for model in model_bagged_svm_tree.models]
+```
+
+```{python colab={'base_uri': 'https://localhost:8080/'}, id="JCFimdxrPzC6", outputId="f1ef1964-7c05-4a28-95a0-2c5a2dd5e632"}
+y_pred_bagged_svm_tree = model_bagged_svm_tree.predict(train_X)
+print("Bagged SVM Tree train error: {}".format(
+    np.mean(y_pred_bagged_svm_tree != train_y)
+))
+```
+
+```{python colab={'base_uri': 'https://localhost:8080/'}, id="zBKHv2P4P3R_", outputId="faea9bbf-9904-4c41-ebfd-93401660f993"}
+y_pred_bagged_svm_tree = model_bagged_svm_tree.predict(test_X)
+print("Bagged SVM Tree test error: {}".format(
+    np.mean(y_pred_bagged_svm_tree != test_y)
+))
+```
+
+```{python colab={'base_uri': 'https://localhost:8080/', 'height': 449}, id="qVeyiqN2P4mP", outputId="5ced82c0-c75f-4e01-e9e2-941e77130a3d"}
+cm = confusion_matrix(test_y, y_pred_bagged_svm_tree)
+positions = ["Guard", "Forward"]
+c_matrix = ConfusionMatrixDisplay(cm, display_labels = positions).plot()
+```

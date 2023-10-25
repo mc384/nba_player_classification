@@ -1,0 +1,591 @@
+---
+jupyter:
+  jupytext:
+    formats: ipynb,Rmd
+    text_representation:
+      extension: .Rmd
+      format_name: rmarkdown
+      format_version: '1.2'
+      jupytext_version: 1.14.5
+  kernelspec:
+    display_name: Python 3 (ipykernel)
+    language: python
+    name: python3
+---
+
+<!-- #region id="OqkjKRbte48K" -->
+**Pre-Processing**
+
+The Data was taken from the ESPN NBA Player Stats website found here: https://www.espn.com/nba/stats/player/_/season/2022/seasontype/2. Each player that was recorded in their dataset played 70% of his team's games each season. This means that we are only using meaningful data.
+
+A package to scrape the data, create graphs and other statistical measures exists here: https://github.com/UBC-MDS/rsketball. Unfortunately, the package seems to be outdated or not fully developed as we were unable to install and use the package in our versions of R.
+
+Instead, we resorted to processing the. data manually. From the website, we were able to pull 9593 rows of data with 22 features of interest. Various checks were used in Excel to ensure no data was lost during the processing stage. The features in the data are as follows:
+
+  - SEASON: The season
+  - POS: Position
+  - GP: Games Played
+  - MIN: Minutes Per Game
+  - PTS: Points Per Game
+  - FGM: Average Field Goals Made
+  - FGA: Average Field Goals Attempted
+  - FG%: Field Goal Percentage
+  - 3PM: Average 3-Point Field Goals Made
+  - 3PA: Average 3-Point Field Goals Attempted
+  - 3P%: 3-Point Field Goal Percentage
+  - FTM: Average Free Throws Made
+  - FTA: Average Free Throws Attempted
+  - FT%: Free Throw Percentage
+  - REB: Rebounds Per Game
+  - AST: Assists Per Game
+  - STL: Steals Per Game
+  - BLK: Blocks Per Game
+  - TO: Turnovers Per Game
+  - DD2: Double Double
+  - TD3: Triple Double
+<!-- #endregion -->
+
+```{python id="b944e6cf"}
+import pandas as pd
+import numpy as np
+# Plotting
+import matplotlib.pyplot as plt
+import seaborn as sns
+# SVM
+from sklearn import svm
+from sklearn.svm import LinearSVC
+# Tree
+from sklearn import tree
+# Bagging
+from sklearn.ensemble import BaggingClassifier
+# Splitting, cross validation, pipelines
+from sklearn.model_selection import train_test_split, GridSearchCV, RandomizedSearchCV, KFold
+from sklearn.datasets import make_classification
+from sklearn.preprocessing import StandardScaler
+from sklearn.pipeline import Pipeline
+from sklearn.inspection import permutation_importance
+from sklearn.compose import ColumnTransformer, make_column_selector
+# Metrics
+from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
+# Calibration time
+import time
+```
+
+```{python colab={'base_uri': 'https://localhost:8080/'}, id="qyfUYpNQpwlT", outputId="f83b834f-b508-42bc-b59c-7d53821515c5"}
+from google.colab import drive
+drive.mount('/content/drive')
+```
+
+```{python id="fyhF0xTJp_59"}
+# Read in the data
+nba = pd.read_csv('/content/drive/My Drive/NBA_Aggregated_Dataset.csv')
+```
+
+<!-- #region id="d1362985" -->
+The NBA dataset contains statistics on NBA players from 2001 to 2022. Features include games played, points per game, steals per game, etc. The problem of interest is to classify players' positions based on their stats. 
+<!-- #endregion -->
+
+```{python colab={'base_uri': 'https://localhost:8080/', 'height': 383}, id="20838236", outputId="f1f8c545-cb46-4280-bc05-8077975ed839"}
+nba.head()
+```
+
+<!-- #region id="e405909e" -->
+It looks like reading in the csv includes some empty columns from Excel, which we will want to drop later. 
+<!-- #endregion -->
+
+```{python colab={'base_uri': 'https://localhost:8080/'}, id="f4fad042", outputId="43d8e74c-debc-4b86-a877-0af1a6c6cc2d"}
+nba['POS'].unique()
+```
+
+```{python colab={'base_uri': 'https://localhost:8080/', 'height': 627}, id="884e6ff6", outputId="ed82c78a-2302-4001-fb3d-e7a3e84e7ee5"}
+nba[nba['POS'].isnull()]
+```
+
+<!-- #region id="5eec2571" -->
+The target variable is POS (position). The only missing value for POS is for Eddy Curry, who, with a bit of research, can confirm plays as C (center). 
+<!-- #endregion -->
+
+```{python id="7cb6b525"}
+nba['POS'].fillna('C', inplace=True)
+```
+
+<!-- #region id="9db47d5b" -->
+The different positions are as follows:  
+- SG: shooting guard
+- C: center
+- SF: small forward
+- G: guard ? 
+- F: forward ?
+- PF: power forward
+- PG: point guard
+- GF: guard/forward.
+The classification problem of interest is to predict whether players are a forward (SF, PF, or C) or a guard (PG, SG).  
+Let 1 represent forwards and 0 represent guards. To avoid ambiguity about guard forwards, who can play both positions, we will drop rows with 'GF' values. This only removes 4 rows corresponding to seasons for the single GF player Jiri Welsch.
+<!-- #endregion -->
+
+```{python id="tPvF4IfBpeIm"}
+nba = nba.drop(nba[nba.POS == 'GF'].index)
+```
+
+```{python colab={'base_uri': 'https://localhost:8080/'}, id="76580e64", outputId="b793f0f3-eba2-4da5-beb9-73011ab433cb"}
+positions = {'SG' : 0, 'C' : 1, 'SF' : 1, 'G' : 0,
+            'F': 1, 'PF': 1, 'PG': 0}
+  
+# Assign every player into one of two classes
+nba_binary = nba.replace({"POS": positions})
+nba_binary['POS'].unique()
+```
+
+```{python colab={'base_uri': 'https://localhost:8080/', 'height': 383}, id="bfbcb252", outputId="87c18728-1d73-4971-b870-c265cc94647e"}
+nba_binary.head()
+```
+
+```{python id="ea669d34"}
+# Drop the excess columns
+list(nba_binary)[22:43]
+nba_binary = nba_binary.drop(list(nba_binary)[22:43], axis=1)
+```
+
+```{python colab={'base_uri': 'https://localhost:8080/'}, id="sdL5l7cjjBE9", outputId="6af80cd9-be55-4ceb-e9bc-2d94ffe8a633"}
+nba_binary = nba_binary[nba_binary['SEASON'] != '2011-2012'] # Remove the lockout season
+nba_binary['POS'].value_counts() # 5666 forwards, 3923 guards (2/3 imbalance)
+```
+
+```{python id="wlnDWaVWRcxy"}
+# Feature engineering
+nba_binary["2PA"] = nba_binary["FGA"] - nba_binary["3PA"]
+nba_binary["2PM"] = nba_binary["FGM"] - nba_binary["3PM"]
+nba_binary["2P%"] = nba_binary["2PM"]/nba_binary["2PA"]
+nba_binary['2P%'] = nba_binary['2P%'].fillna(0)
+nba_binary['2P%'] = nba_binary['2P%'].clip(upper=1)
+```
+
+<!-- #region id="fd549714" -->
+We propose the following classifiers:
+- Support Vector Machines
+- Random Forests
+- Combined SVM with tree bagging
+<!-- #endregion -->
+
+```{python colab={'base_uri': 'https://localhost:8080/'}, id="Tq5jAGZSb9In", outputId="8f83da66-e24f-44cc-e6ba-bfaa85841fab"}
+nba_binary.shape
+```
+
+```{python colab={'base_uri': 'https://localhost:8080/'}, id="P-b_6fyxcBdP", outputId="9c391424-63bb-461e-ab98-e1dd250c08f6"}
+nba_forward = nba_binary[nba_binary['POS'] == 1]
+nba_guard = nba_binary[nba_binary['POS'] == 0]
+nba_forward.shape, nba_guard.shape
+```
+
+```{python colab={'base_uri': 'https://localhost:8080/'}, id="eAXh8pM2cIOX", outputId="3bb8f55c-be63-416e-dddc-7ce1526ee954"}
+# omitting distribution for NAME since there's a lot of unique names
+nba_binary['NAME'].unique().shape
+```
+
+# 2022-2023 Data
+
+
+Below we have the test data set for 2022-2023:
+
+```{python}
+nba_recent = pd.read_csv('/content/drive/My Drive/2022-2023_NBA_Data.csv')
+```
+
+```{python}
+# Assign every player into one of two classes
+nba_recent = nba_recent.replace({"POS": positions})
+nba_recent['POS'].unique()
+```
+
+```{python}
+nba_recent["2PA"] = nba_recent["FGA"] - nba_recent["3PA"]
+nba_recent["2PM"] = nba_recent["FGM"] - nba_recent["3PM"]
+nba_recent["2P%"] = nba_recent["2PM"]/nba_recent["2PA"]
+nba_recent['2P%'] = nba_recent['2P%'].fillna(0)
+nba_recent['2P%'] = nba_recent['2P%'].clip(upper=1)
+```
+
+The below code performs transformations necessary to generate the radial plots in plotly:
+
+```{python colab={'base_uri': 'https://localhost:8080/', 'height': 423}, id="j2KgBNVOC6FP", outputId="cf501e18-d0ec-4021-bb14-76ff7cc0a9bc"}
+import plotly.express as px
+df = nba_binary.copy()
+df['GP_PCT']  = df['GP']/max(df['GP'])
+df['MIN_PCT'] = df['MIN']/max(df['MIN'])
+df['PTS_PCT'] = df['PTS']/max(df['PTS'])
+df['FGM_PCT'] = df['FGM']/max(df['FGM'])
+df['FGA_PCT'] = df['FGA']/max(df['FGA'])
+df['FG%_PCT'] = df['FG%']/max(df['FG%'])
+df['3PM_PCT'] = df['3PM']/max(df['3PM'])
+df['3PA_PCT'] = df['3PA']/max(df['3PA'])
+df['3P%_PCT'] = df['3P%']/max(df['3P%'])
+df['FTM_PCT'] = df['FTM']/max(df['FTM'])
+df['FTA_PCT'] = df['FTA']/max(df['FTA'])
+df['FT%_PCT'] = df['FT%']/max(df['FT%'])
+df['REB_PCT'] = df['REB']/max(df['REB'])
+df['AST_PCT'] = df['AST']/max(df['AST'])
+df['STL_PCT'] = df['STL']/max(df['STL'])
+df['BLK_PCT'] = df['BLK']/max(df['BLK'])
+df['TO_PCT']  = df['TO']/max(df['TO'])
+df['DD2_PCT'] = df['DD2']/max(df['DD2'])
+df['TD3_PCT'] = df['TD3']/max(df['TD3'])
+column_names = list(df.columns.values)
+#column_names
+agg_radar_df = df[['POS', 'REB_PCT', 'AST_PCT', 'PTS_PCT', 'BLK_PCT', '3PM_PCT']]
+agg_radar_df
+```
+
+```{python colab={'base_uri': 'https://localhost:8080/', 'height': 187}, id="Jre7rX3eXkUk", outputId="fbac4231-4cf2-460b-9641-4fe749432982"}
+full_grouped_df = df[['POS', 'GP_PCT', 'MIN_PCT', 'PTS_PCT', 'FGM_PCT', 'FGA_PCT',
+                      'FG%_PCT', '3PM_PCT', '3PA_PCT', '3P%_PCT', 'FTM_PCT', 'FTA_PCT',
+                      'FT%_PCT', 'REB_PCT', 'AST_PCT', 'STL_PCT', 'BLK_PCT', 'TO_PCT', 'DD2_PCT', 'TD3_PCT']]
+full_grouped_df = full_grouped_df.groupby(['POS']).mean()
+full_grouped_df
+```
+
+```{python colab={'base_uri': 'https://localhost:8080/', 'height': 143}, id="beIILQyRExUJ", outputId="facc7e86-47b8-4a02-ccc9-d6e1073cf611"}
+plotly_df = agg_radar_df.groupby(['POS']).mean()
+plotly_df
+```
+
+```{python colab={'base_uri': 'https://localhost:8080/', 'height': 597}, id="V5SupkmxFKyb", outputId="af0c33cf-bf12-4ea7-94e7-39b0c54a7ea6"}
+guard_player = pd.DataFrame(dict(
+    stats=plotly_df.iloc[0].to_numpy(),
+    features=['REB_PCT', 'AST_PCT', 'PTS_PCT', 'BLK_PCT', '3PM_PCT']))
+fig = px.line_polar(guard_player, r='stats', theta='features', line_close=True)
+fig.update_layout(title='Guard Statistics')
+fig.show()
+```
+
+```{python colab={'base_uri': 'https://localhost:8080/', 'height': 611}, id="AxT7ZOrOFxhQ", outputId="6b910e1d-cae9-4b7f-f513-e12c4683cbca"}
+forward_player = pd.DataFrame(dict(
+    stats=plotly_df.iloc[1].to_numpy(),
+    features=['REB_PCT', 'AST_PCT', 'PTS_PCT', 'BLK_PCT', '3PM_PCT']))
+fig2 = px.line_polar(forward_player, r='stats', theta='features', line_close=True)
+fig.update_layout(title='Forward Statistics')
+fig2.show()
+```
+
+<!-- #region id="9dfe5136" -->
+# SVM
+<!-- #endregion -->
+
+```{python id="7437225d"}
+# Exclude POS, NAME, SEASON, and year from the training set
+nba_X = nba_binary.drop(columns = ["POS", "NAME", "SEASON"]).to_numpy()
+nba_y = nba_binary["POS"].to_numpy()
+```
+
+```{python id="qXSUlWX4Q3Tx"}
+# Training data
+train_X = nba_X
+train_y = nba_y
+```
+
+```{python colab={'base_uri': 'https://localhost:8080/'}, id="eqU9kdhJlkK_", outputId="a3c5e08d-991e-45c8-abdb-b07467c39920"}
+from sklearn.feature_selection import SelectKBest
+from sklearn.feature_selection import mutual_info_classif
+
+# Mutual information
+selector = SelectKBest(mutual_info_classif, k=10)
+X_new = selector.fit_transform(train_X, train_y)
+
+selected_features = selector.get_support(indices=True)
+
+print("Selected feature indices:", selected_features)
+```
+
+```{python colab={'base_uri': 'https://localhost:8080/', 'height': 490}, id="jWhTo26utXQG", outputId="caa6ecf0-d5a5-4692-b46b-8687ac0b4715"}
+names = ["GP", "FGM", "FG%", "3PM", "3PA", "3P%", "FT%", "REB", "AST", "STL", "BLK", "TO", "DD2", "TD3", "2PM", "2P%"]
+mutual_X = nba_binary.drop(columns = ["POS", "NAME", "SEASON", "MIN", "PTS", "FTM", "FTA", "2PA"]).to_numpy()
+mutual_y = nba_binary["POS"].to_numpy()
+mutual_info = mutual_info_classif(mutual_X, mutual_y, random_state=42)
+
+# Plot of mutual information
+fig, ax = plt.subplots()
+ax.bar(range(mutual_X.shape[1]), mutual_info)
+ax.set_xticks(range(mutual_X.shape[1]))
+ax.set_xticklabels(nba_binary.drop(columns = ["POS", "NAME", "SEASON", "MIN", "PTS", "FTM", "FTA", "2PA"]), rotation=90)
+ax.set_xlabel("Feature")
+ax.set_ylabel("Mutual Information")
+ax.set_title("Mutual Information Scores for NBA players")
+plt.show()
+```
+
+```{python id="2X5iFyQ2lufC"}
+column_names = nba_binary.columns.values[3:]
+svm_f = column_names[selected_features]
+svm_f
+exclude = list(set(column_names) - set(svm_f)) #excluded columns
+```
+
+```{python id="l6sTKeSMboEY"}
+exclude = exclude + ["POS", "NAME", "SEASON"]
+nba_X = nba_binary.drop(columns = exclude).to_numpy()
+nba_y = nba_binary["POS"].to_numpy()
+train_X = nba_X 
+train_y = nba_y
+```
+
+<!-- #region id="I0yX6yZPo1PB" -->
+Grid search cross validation for the linear kernel svm:
+<!-- #endregion -->
+
+```{python colab={'base_uri': 'https://localhost:8080/'}, id="esCrZJmFozjp", outputId="f16c0fa5-d91e-46ba-8ae8-ccd3aceaa2ce"}
+start_time = time.perf_counter()
+
+model_linear = Pipeline(
+    steps=[("scaler", StandardScaler()), 
+           ("model", LinearSVC(class_weight = 'balanced', dual = False,
+                             random_state = 441))]
+)
+
+cv = KFold(
+    n_splits=5, 
+    shuffle=False 
+)
+
+svm_grid = {'model__C': [.01, 0.1, 1, 10]}
+            #"model__class_weight": [None, "balanced"]}
+
+cv_svm = GridSearchCV(
+    estimator = model_linear,
+    param_grid = svm_grid,
+    n_jobs = -1,
+    cv = cv,
+    verbose = 4
+)
+
+cv_svm.fit(X = train_X, y = train_y)
+
+end_time = time.perf_counter()
+
+runtime = end_time - start_time
+
+print(f"Runtime: {runtime:.6f} seconds")
+```
+
+```{python colab={'base_uri': 'https://localhost:8080/'}, id="DUspx4ihDMq6", outputId="1de0d390-490d-48d3-bc42-3196ab7ee6e9"}
+cv_svm.best_params_
+```
+
+```{python id="n7ymql6mcKz1"}
+test_X = nba_recent.drop(columns = exclude).to_numpy()
+test_y = nba_recent["POS"].to_numpy()
+```
+
+```{python colab={'base_uri': 'https://localhost:8080/'}, id="jhE0PVsaz4r3", outputId="874995ef-3c16-472e-c375-8c462deea3ce"}
+model_linear.fit(X = train_X, y = train_y)
+print("Linear-CV model train error: {}".format(
+    1.0 - model_linear.score(X=train_X, y=train_y)
+))
+print("Linear-CV model test error: {}".format(
+    1.0 - model_linear.score(X=test_X, y=test_y)
+))
+```
+
+Grid search cross validation for the rbf kernel svm:
+
+```{python colab={'base_uri': 'https://localhost:8080/'}, id="xcNwRruGprTC", outputId="aa3b2013-0556-4b78-9d85-549a1fe9d3a4"}
+start_time = time.perf_counter()
+
+model_rbf = Pipeline(
+    steps=[("scaler", StandardScaler()), 
+           ("model", svm.SVC(kernel="rbf", class_weight = 'balanced',
+                             random_state = 441))]
+)
+
+cv = KFold(
+    n_splits=5, 
+    shuffle=False 
+)
+
+rbf_svm_grid = {'model__C': [.01, 0.1, 1, 10],
+            'model__gamma': ['scale', 'auto']}
+
+cv_svm_rbf = GridSearchCV(
+    estimator = model_rbf,
+    param_grid = rbf_svm_grid,
+    n_jobs = -1,
+    cv = cv,
+    verbose = 4
+)
+
+cv_svm_rbf.fit(X = train_X, y = train_y)
+
+end_time = time.perf_counter()
+
+runtime = end_time - start_time
+
+print(f"Runtime: {runtime:.6f} seconds")
+```
+
+```{python colab={'base_uri': 'https://localhost:8080/'}, id="kHesiVWip3q4", outputId="59b0e66b-be0c-4b2d-d29a-a8fb96498d13"}
+cv_svm_rbf.best_params_
+```
+
+```{python colab={'base_uri': 'https://localhost:8080/'}, id="ld8B8Nls1tNT", outputId="9f29066c-690d-40fe-c4e5-af6dd40d34dc"}
+model_rbf.fit(train_X, train_y)
+print("RBF-CV model train error: {}".format(
+    1.0 - model_rbf.score(X=train_X, y=train_y)
+))
+print("RBF-CV model test error: {}".format(
+    1.0 - model_rbf.score(X=test_X, y=test_y)
+))
+```
+
+Grid search cross validation for the polynomial kernel svm:
+
+```{python colab={'base_uri': 'https://localhost:8080/'}, id="0O9BQTS0qgbh", outputId="5e4bc021-5bac-4812-d0d4-e6235ebf4b15"}
+start_time = time.perf_counter()
+
+model_poly = Pipeline(
+    steps=[("scaler", StandardScaler()), 
+           ("model", svm.SVC(kernel="poly", class_weight = 'balanced',
+                             random_state = 41))]
+)
+
+poly_cv = KFold(
+    n_splits=5, 
+    shuffle=False
+)
+
+poly_svm_grid = {'model__C': [.01, 0.1, 1, 10],
+            'model__gamma': ['scale', 'auto']}
+
+cv_svm_poly = GridSearchCV(
+    estimator = model_poly,
+    param_grid = poly_svm_grid,
+    n_jobs = -1,
+    cv = poly_cv,
+    verbose = 4
+)
+
+cv_svm_poly.fit(X = train_X, y = train_y)
+
+end_time = time.perf_counter()
+
+runtime = end_time - start_time
+
+print(f"Runtime: {runtime:.6f} seconds")
+```
+
+```{python colab={'base_uri': 'https://localhost:8080/'}, id="8g_LSfWCqmkv", outputId="3ae8fefe-7ced-4b42-a208-4c23a7de6ef6"}
+cv_svm_poly.best_params_
+```
+
+```{python colab={'base_uri': 'https://localhost:8080/'}, id="B64dHqge15NI", outputId="f19f5e0e-433d-47ae-9051-80a7e46581cb"}
+model_poly.fit(train_X, train_y)
+print("RBF-CV model train error: {}".format(
+    1.0 - model_poly.score(X=train_X, y=train_y)
+))
+print("RBF-CV model test error: {}".format(
+    1.0 - model_poly.score(X=test_X, y=test_y)
+))
+```
+
+<!-- #region id="QBX4hbnhxUhm" -->
+Confusion Matrices
+<!-- #endregion -->
+
+```{python colab={'base_uri': 'https://localhost:8080/', 'height': 449}, id="W2eHHm5JhVDK", outputId="1a48e2ca-4156-4047-99f4-e12628614e29"}
+# linear
+y_pred_linear_svm = model_linear.predict(test_X)
+cm_linear_svm = confusion_matrix(test_y, y_pred_linear_svm)
+positions = ["Guard", "Forward"]
+svm_linear_matrix = ConfusionMatrixDisplay(cm_linear_svm, display_labels = positions).plot()
+```
+
+```{python colab={'base_uri': 'https://localhost:8080/', 'height': 449}, id="SwT9LHMMhifh", outputId="1cb57886-fc26-4b71-e9a3-8c2bae789fe9"}
+# RBF
+y_pred_svm = model_rbf.predict(test_X)
+cm_svm = confusion_matrix(test_y, y_pred_svm)
+positions = ["Guard", "Forward"]
+svm_c_matrix = ConfusionMatrixDisplay(cm_svm, display_labels = positions).plot()
+```
+
+```{python colab={'base_uri': 'https://localhost:8080/', 'height': 449}, id="BAs0NMqzhrY-", outputId="e9ba8333-67bd-42ed-a994-8392b7c6f171"}
+# Poly
+y_pred_poly_svm = model_poly.predict(test_X)
+cm_poly_svm = confusion_matrix(test_y, y_pred_poly_svm)
+positions = ["Guard", "Forward"]
+svm_poly_matrix = ConfusionMatrixDisplay(cm_poly_svm, display_labels = positions).plot()
+```
+
+<!-- #region id="vvYqS1NVwi59" -->
+Metrics for the RBF SVM:
+<!-- #endregion -->
+
+<!-- #region id="xf_HKsemApLk" -->
+## Bagging
+<!-- #endregion -->
+
+<!-- #region id="t11mz4gElcPS" -->
+Bagging uses the DecisionTreeClassifier() as the base estimator, which we can perform parameter calibration on using cross validation.
+<!-- #endregion -->
+
+```{python colab={'base_uri': 'https://localhost:8080/'}, id="E44Y5cEQllYT", outputId="c3b7fa29-e0f7-40e6-b790-12cd6fd63788"}
+start_time = time.perf_counter()
+
+tree_clf = tree.DecisionTreeClassifier(random_state = 41)
+tree_grid = {'criterion': ['gini', 'entropy', 'log_loss'],
+               'max_depth': [10, 20, 30, 40, 50],
+               'min_samples_split': [2, 4,6,8],
+               'min_samples_leaf': [1,2,3],
+               'max_features': ['sqrt', 'log2']}
+
+random_search = RandomizedSearchCV(estimator = tree_clf, param_distributions = tree_grid, 
+                                   n_iter = 100, cv = 5, verbose=4, n_jobs = -1, random_state = 41)
+random_search.fit(train_X, train_y)
+random_search.best_params_
+end_time = time.perf_counter()
+
+runtime = end_time - start_time
+
+print(f"Runtime: {runtime:.6f} seconds")
+```
+
+```{python colab={'base_uri': 'https://localhost:8080/'}, id="3MSwAvLSLgHm", outputId="81a7ff9e-0ad4-4f76-933b-a0d805afddeb"}
+random_search.best_params_
+```
+
+```{python colab={'base_uri': 'https://localhost:8080/', 'height': 117}, id="NieEEnNHmw-Y", outputId="cdbb8738-1673-44bb-be26-484588779e29"}
+tuned_tree = tree.DecisionTreeClassifier(
+    criterion = 'log_loss',
+    min_samples_split = 8,
+    min_samples_leaf = 1,
+    max_features = 'log2',
+    max_depth = 10,
+    random_state = 41
+)
+
+tuned_bagging = BaggingClassifier(estimator = tuned_tree, random_state = 41)
+tuned_bagging.fit(train_X, train_y)
+```
+
+<!-- #region id="QDP5zyHARBxY" -->
+The partial dependency plot for REB and AST above indicates that as rebounds increases, the probability of classification to a forward increases. Conversely, as assists increase, the probability of being classified as a forward decreases.
+<!-- #endregion -->
+
+```{python id="1UiXi2alTQ8p"}
+y_pred = tuned_bagging.predict(test_X)
+```
+
+```{python id="pEfIJvJlTitt"}
+cm = confusion_matrix(test_y, y_pred)
+```
+
+```{python colab={'base_uri': 'https://localhost:8080/', 'height': 450}, id="p8j9f8Z2T1E7", outputId="369cf14e-0e8b-4fa3-bb88-038310ab6b96"}
+positions = ["Guard", "Forward"]
+c_matrix = ConfusionMatrixDisplay(cm, display_labels = positions).plot()
+```
+
+```{python colab={'base_uri': 'https://localhost:8080/'}, id="BgS8cNWS05Mr", outputId="68084bb4-c887-431c-8bc0-104e2cc76a1d"}
+# Bagging results
+print("Bagging-CV model train error: {}".format(
+    1.0 - tuned_bagging.score(X=train_X, y=train_y)
+))
+print("Bagging-CV model test error: {}".format(
+    1.0 - tuned_bagging.score(X=test_X, y=test_y)
+))
+```

@@ -1,0 +1,243 @@
+---
+jupyter:
+  jupytext:
+    formats: ipynb,Rmd
+    text_representation:
+      extension: .Rmd
+      format_name: rmarkdown
+      format_version: '1.2'
+      jupytext_version: 1.14.5
+  kernelspec:
+    display_name: Python 3 (ipykernel)
+    language: python
+    name: python3
+---
+
+```{python _cell_guid="b1076dfc-b9ad-4769-8c92-a6c4dae69d19", _uuid="8f2839f25d086af736a60e9eeb907d3b93b6e0e5", papermill={'duration': 9.6628, 'end_time': '2023-04-23T02:23:02.154841', 'exception': False, 'start_time': '2023-04-23T02:22:52.492041', 'status': 'completed'}}
+import pandas as pd
+import numpy as np
+
+# Plotting
+import matplotlib.pyplot as plt
+
+from sklearn.model_selection import KFold
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import Dense
+
+import random
+import tensorflow as tf
+
+# Calibration time
+import time
+```
+
+```{python papermill={'duration': 0.126585, 'end_time': '2023-04-23T02:23:02.285226', 'exception': False, 'start_time': '2023-04-23T02:23:02.158641', 'status': 'completed'}}
+nba = pd.read_csv("/kaggle/input/all-nba/All NBA Data.csv")
+nba['POS'].fillna('C', inplace=True) # Make Eddy Curry a Center
+nba = nba.drop(nba[nba.POS == 'GF'].index) # Remove Jiri Welsch
+
+positions = {'SG' : 0, 'PG': 0, 'G' : 0,
+             'C' : 1, 'SF' : 1, 'F': 1, 'PF': 1}
+  
+# Assign every player into one of two classes
+nba_binary = nba.replace({"POS": positions})
+
+def years_since(season):
+    season = int(season.split("-")[0])
+    return season-2001
+
+nba_binary["years_since"] = nba_binary["SEASON"].apply(lambda x: years_since(x)) # Convert Factor: "2001-2002" to Int: 2001
+nba_binary = nba_binary[nba_binary['SEASON'] != '2011-2012'] # Remove the lockout season
+
+nba_binary["2PA"] = nba_binary["FGA"] - nba_binary["3PA"]
+nba_binary["2PM"] = nba_binary["FGM"] - nba_binary["3PM"]
+nba_binary["2P%"] = nba_binary["2PM"]/nba_binary["2PA"]
+nba_binary['2P%'] = nba_binary['2P%'].fillna(0)
+nba_binary['2P%'] = nba_binary['2P%'].clip(upper=1)
+```
+
+```{python papermill={'duration': 0.029152, 'end_time': '2023-04-23T02:23:02.317967', 'exception': False, 'start_time': '2023-04-23T02:23:02.288815', 'status': 'completed'}}
+# Create NBA_Train and NBA_Test dataframes
+NBA_Train = nba_binary[nba_binary['SEASON'] != "2022-2023"]
+NBA_Test = nba_binary[nba_binary['SEASON'] == "2022-2023"]
+
+NBA_Train_X = NBA_Train.drop(columns = ["POS", "NAME", "SEASON"]).to_numpy()
+NBA_Train_y = NBA_Train["POS"].to_numpy()
+
+NBA_Test_X = NBA_Test.drop(columns = ["POS", "NAME", "SEASON"]).to_numpy()
+NBA_Test_y = NBA_Test["POS"].to_numpy()
+```
+
+```{python papermill={'duration': 0.016846, 'end_time': '2023-04-23T02:23:02.338467', 'exception': False, 'start_time': '2023-04-23T02:23:02.321621', 'status': 'completed'}}
+nba_forward = NBA_Train[NBA_Train['POS'] == 1]
+nba_guard = NBA_Train[NBA_Train['POS'] == 0]
+```
+
+<!-- #region papermill={"duration": 0.003097, "end_time": "2023-04-23T02:23:02.345141", "exception": false, "start_time": "2023-04-23T02:23:02.342044", "status": "completed"} -->
+**Cross Validation for Number of Hidden Layers**
+<!-- #endregion -->
+
+```{python papermill={'duration': 151.111959, 'end_time': '2023-04-23T02:25:33.460457', 'exception': False, 'start_time': '2023-04-23T02:23:02.348498', 'status': 'completed'}}
+start_time = time.perf_counter()
+
+X = NBA_Train_X
+y = NBA_Train_y
+
+k = 5
+kf = KFold(n_splits=k, shuffle=True)
+
+one_hidden_acc = []
+two_hidden_acc = []
+three_hidden_acc = []
+
+for train_index, val_index in kf.split(X):
+    # split the data into training and validation sets
+    X_train, y_train = X[train_index], y[train_index]
+    X_val, y_val = X[val_index], y[val_index]
+
+    # One Hidden Layer
+    model = Sequential()
+    model.add(Dense(16, activation='relu', input_shape=(23,)))
+    model.add(Dense(1, activation='sigmoid'))
+    model.compile(loss='binary_crossentropy', optimizer='adam', metrics=['accuracy'])
+
+    model.fit(X_train, y_train, epochs=20, batch_size=32, verbose=0)
+
+    loss, acc = model.evaluate(X_val, y_val, verbose=0)
+    one_hidden_acc.append(acc)
+    
+    # Two Hidden Layers
+    model2 = Sequential()
+    model2.add(Dense(16, activation='relu', input_shape=(23,)))
+    model2.add(Dense(32, activation='relu'))
+    model2.add(Dense(1, activation='sigmoid'))
+    model2.compile(loss='binary_crossentropy', optimizer='adam', metrics=['accuracy'])
+
+    model2.fit(X_train, y_train, epochs=20, batch_size=32, verbose=0)
+
+    loss, acc = model2.evaluate(X_val, y_val, verbose=0)
+    two_hidden_acc.append(acc)
+    
+    # Three Hidden Layer
+    model3 = Sequential()
+    model3.add(Dense(16, activation='relu', input_shape=(23,)))
+    model3.add(Dense(32, activation='relu'))
+    model3.add(Dense(32, activation='relu'))
+    model3.add(Dense(1, activation='sigmoid'))
+    model3.compile(loss='binary_crossentropy', optimizer='adam', metrics=['accuracy'])
+
+    model3.fit(X_train, y_train, epochs=20, batch_size=23, verbose=0)
+
+    loss, acc = model3.evaluate(X_val, y_val, verbose=0)
+    three_hidden_acc.append(acc)
+
+# Performance is nearly identical, use one hidden layer by occam's razor
+print(f"Average accuracy with one hidden layer {np.mean(one_hidden_acc)}")
+print(f"Average accuracy with two hidden layers {np.mean(two_hidden_acc)}")
+print(f"Average accuracy with three hidden layers {np.mean(three_hidden_acc)}")
+
+end_time = time.perf_counter()
+runtime = end_time - start_time
+print(f"Runtime: {runtime:.6f} seconds")
+```
+
+<!-- #region papermill={"duration": 0.003335, "end_time": "2023-04-23T02:25:33.467506", "exception": false, "start_time": "2023-04-23T02:25:33.464171", "status": "completed"} -->
+**Cross Validation for Number of Neurons in Hidden Layer**
+<!-- #endregion -->
+
+```{python papermill={'duration': 132.386235, 'end_time': '2023-04-23T02:27:45.857314', 'exception': False, 'start_time': '2023-04-23T02:25:33.471079', 'status': 'completed'}}
+start_time = time.perf_counter()
+
+neurons_24_acc = []
+neurons_48_acc = []
+neurons_96_acc = []
+
+# loop over the folds
+for train_index, val_index in kf.split(X):
+    # split the data into training and validation sets
+    X_train, y_train = X[train_index], y[train_index]
+    X_val, y_val = X[val_index], y[val_index]
+
+    # define and compile the Keras model
+    model = Sequential()
+    model.add(Dense(24, activation='relu', input_shape=(23,)))
+    model.add(Dense(1, activation='sigmoid'))
+    model.compile(loss='binary_crossentropy', optimizer='adam', metrics=['accuracy'])
+
+    # train the model on the training set
+    model.fit(X_train, y_train, epochs=20, batch_size=32, verbose=0)
+
+    # evaluate the model on the validation set
+    loss, acc = model.evaluate(X_val, y_val, verbose=0)
+    neurons_24_acc.append(acc)
+    
+    # define and compile the Keras model
+    model2 = Sequential()
+    model2.add(Dense(48, activation='relu', input_shape=(23,)))
+    model2.add(Dense(1, activation='sigmoid'))
+    model2.compile(loss='binary_crossentropy', optimizer='adam', metrics=['accuracy'])
+
+    # train the model on the training set
+    model2.fit(X_train, y_train, epochs=20, batch_size=32, verbose=0)
+
+    # evaluate the model on the validation set
+    loss, acc = model2.evaluate(X_val, y_val, verbose=0)
+    neurons_48_acc.append(acc)
+    
+    # define and compile the Keras model
+    model3 = Sequential()
+    model3.add(Dense(96, activation='relu', input_shape=(23,)))
+    model3.add(Dense(1, activation='sigmoid'))
+    model3.compile(loss='binary_crossentropy', optimizer='adam', metrics=['accuracy'])
+
+    # train the model on the training set
+    model3.fit(X_train, y_train, epochs=20, batch_size=32, verbose=0)
+
+    # evaluate the model on the validation set
+    loss, acc = model3.evaluate(X_val, y_val, verbose=0)
+    neurons_96_acc.append(acc)
+
+# Again, performance is nearly identical so we use 24 neurons
+print(f"Average accuracy with 24 neurons {np.mean(neurons_24_acc)}")
+print(f"Average accuracy with 48 neurons {np.mean(neurons_48_acc)}")
+print(f"Average accuracy with 96 neurons {np.mean(neurons_96_acc)}")
+
+end_time = time.perf_counter()
+runtime = end_time - start_time
+print(f"Runtime: {runtime:.6f} seconds")
+```
+
+<!-- #region papermill={"duration": 0.00333, "end_time": "2023-04-23T02:27:45.864414", "exception": false, "start_time": "2023-04-23T02:27:45.861084", "status": "completed"} -->
+**Model Fitting**
+<!-- #endregion -->
+
+```{python papermill={'duration': 83.091656, 'end_time': '2023-04-23T02:29:08.959706', 'exception': False, 'start_time': '2023-04-23T02:27:45.868050', 'status': 'completed'}}
+# Actual Model
+start_time = time.perf_counter()
+
+seed = 25
+np.random.seed(seed)
+random.seed(seed)
+tf.random.set_seed(seed)
+
+nba_model = Sequential()
+nba_model.add(Dense(24, activation='relu', input_shape=(23,)))
+nba_model.add(Dense(1, activation='sigmoid'))
+nba_model.compile(loss='binary_crossentropy', optimizer='adam', metrics=['accuracy'])
+
+# train the model on the training set
+nba_model.fit(NBA_Train_X, NBA_Train_y, epochs=100, batch_size=32, verbose=0)
+
+# evaluate the model on the validation set
+loss, nba_acc = nba_model.evaluate(NBA_Test_X, NBA_Test_y, verbose=1)
+
+print(f"{seed}: {1-nba_acc}")
+
+end_time = time.perf_counter()
+runtime = end_time - start_time
+print(f"Runtime: {runtime:.6f} seconds")
+```
+
+<!-- #region papermill={"duration": 0.003512, "end_time": "2023-04-23T02:29:08.967155", "exception": false, "start_time": "2023-04-23T02:29:08.963643", "status": "completed"} -->
+**Test Error is 0.16853934**
+<!-- #endregion -->

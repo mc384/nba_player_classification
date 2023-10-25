@@ -1,0 +1,128 @@
+---
+jupyter:
+  jupytext:
+    formats: ipynb,Rmd
+    text_representation:
+      extension: .Rmd
+      format_name: rmarkdown
+      format_version: '1.2'
+      jupytext_version: 1.14.5
+  kernelspec:
+    display_name: Python 3 (ipykernel)
+    language: python
+    name: python3
+output: pdf_document
+---
+
+```{python papermill={'duration': 11.254607, 'end_time': '2023-04-23T02:51:09.174621', 'exception': False, 'start_time': '2023-04-23T02:50:57.920014', 'status': 'completed'}}
+import pandas as pd
+import numpy as np
+
+# Plotting
+import matplotlib.pyplot as plt
+
+from sklearn.model_selection import KFold
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import Dense
+
+import random
+import tensorflow as tf
+
+# Calibration time
+import time
+```
+
+```{python papermill={'duration': 0.104847, 'end_time': '2023-04-23T02:51:09.282663', 'exception': False, 'start_time': '2023-04-23T02:51:09.177816', 'status': 'completed'}}
+nba = pd.read_csv('/kaggle/input/nba-time-fixed/NBA Dataset Time Fixed - NBA_Aggregated_Dataset (1).csv')
+
+nba['POS'].fillna('C', inplace=True) # Make Eddy Curry a Center
+nba = nba.drop(nba[nba.POS == 'GF'].index) # Remove Jiri Welsch
+
+positions = {'SG' : 0, 'PG': 0, 'G' : 0,
+             'C' : 1, 'SF' : 1, 'F': 1, 'PF': 1}
+  
+# Assign every player into one of two classes
+nba_binary = nba.replace({"POS": positions})
+```
+
+```{python papermill={'duration': 0.037024, 'end_time': '2023-04-23T02:51:09.322434', 'exception': False, 'start_time': '2023-04-23T02:51:09.285410', 'status': 'completed'}}
+def years_since(season):
+    season = int(season.split("-")[0])
+    return season-2001
+
+nba_binary["years_since"] = nba_binary["SEASON"].apply(lambda x: years_since(x)) # Convert Factor: "2001-2002" to Int: 2001
+nba_binary = nba_binary[nba_binary['SEASON'] != '2011-2012'] # Remove the lockout season
+
+nba_binary["2PA"] = nba_binary["FGA"] - nba_binary["3PA"]
+nba_binary["2PM"] = nba_binary["FGM"] - nba_binary["3PM"]
+nba_binary["2P%"] = nba_binary["2PM"]/nba_binary["2PA"]
+nba_binary['2P%'] = nba_binary['2P%'].fillna(0)
+nba_binary['2P%'] = nba_binary['2P%'].clip(upper=1)
+```
+
+```{python papermill={'duration': 0.019864, 'end_time': '2023-04-23T02:51:09.345171', 'exception': False, 'start_time': '2023-04-23T02:51:09.325307', 'status': 'completed'}}
+nba_forward = nba_binary[nba_binary['POS'] == 1]
+nba_guard = nba_binary[nba_binary['POS'] == 0]
+```
+
+```{python papermill={'duration': 6.660291, 'end_time': '2023-04-23T02:51:16.008453', 'exception': False, 'start_time': '2023-04-23T02:51:09.348162', 'status': 'completed'}}
+import seaborn as sns
+
+numeric_features = nba_binary.columns[3:]
+nfeatures = len(numeric_features)
+ncol = np.sqrt(nfeatures).astype(int)+1
+nrow = ncol
+fig, axs = plt.subplots(nrow, ncol, figsize=(5*ncol, 5*nrow))
+
+for r in range(nrow):
+    for c in range(ncol):
+        if ncol*r+c < nfeatures:
+            feature = numeric_features[ncol*r+c]
+            f_data = nba_forward[feature]
+            g_data = nba_guard[feature]
+            
+            f_mean = f_data.mean() # Compute the mean for forward players
+            g_mean = g_data.mean() # Compute the mean for guard players
+            
+            sns.kdeplot(f_data, color='r', label='Forward', ax=axs[r,c])
+            sns.kdeplot(g_data, color='g', label='Guard', ax=axs[r,c])
+            
+            axs[r, c].set_title(feature)
+            axs[r, c].set_xlabel('Value')
+            axs[r, c].set_ylabel('Density')
+            axs[r, c].legend()
+            
+plt.tight_layout()
+plt.show()
+```
+
+```{python papermill={'duration': 2.150568, 'end_time': '2023-04-23T02:51:18.171697', 'exception': False, 'start_time': '2023-04-23T02:51:16.021129', 'status': 'completed'}}
+import seaborn as sns
+
+numeric_features = ["FGA", "FG%", "3PA", "3P%", "FT%", "REB", "AST", "BLK"]
+nfeatures = len(numeric_features)
+ncol = 4
+nrow = 2
+fig, axs = plt.subplots(nrow, ncol, figsize=(5*ncol, 5*nrow))
+
+for r in range(nrow):
+    for c in range(ncol):
+        if ncol*r+c < nfeatures:
+            feature = numeric_features[ncol*r+c]
+            f_data = nba_forward[feature]
+            g_data = nba_guard[feature]
+            
+            f_mean = f_data.mean() # Compute the mean for forward players
+            g_mean = g_data.mean() # Compute the mean for guard players
+            
+            sns.kdeplot(f_data, color='r', label='Forward', ax=axs[r,c])
+            sns.kdeplot(g_data, color='g', label='Guard', ax=axs[r,c])
+            
+            axs[r, c].set_title(feature)
+            axs[r, c].set_xlabel('Value')
+            axs[r, c].set_ylabel('Density')
+            axs[r, c].legend()
+            
+plt.tight_layout()
+plt.show()
+```
